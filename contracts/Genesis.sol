@@ -1,63 +1,64 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+// SPDX-License-Identifier: GPL-3.0
 
-import { ERC721A } from "erc721a/contracts/ERC721A.sol";
+pragma solidity >=0.8.2 <0.9.0;
 
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Burnable.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/utils/Strings.sol"; 
 
-import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+contract Memepotz is Ownable, ERC721Burnable, Pausable {
+    using Strings for uint256;
 
-contract Genesis is ERC721A, Ownable {
-    string public uriSuffix;
-    string public baseUri;
-    uint256 public maxSupply;
-    uint256 public mintPrice;
-    uint256 public maxPerWallet;
+    uint256 private _tokenIds;
+    uint256 public maxPerWallet = 10;
+    uint256 public mintPrice = 1 ether;
     bytes32 public merkleRoot;
 
-    mapping(address owner => uint256 tokenId) public mintedTokens;
+    // Base URL for metadata
+    string private _baseTokenURI;
 
-    modifier whitelistCompliance(bytes32[] calldata _merkleProof) {
-        bytes32 node = keccak256(abi.encodePacked(msg.sender));
-        require(MerkleProof.verify(_merkleProof, merkleRoot, node), "Invalid Merkle proof");
-        _;
+    // Mapping wallet address to counter
+    mapping(address => uint256) private _mintedTokens;
+
+    constructor(string memory baseTokenURI, bytes32 merkleRoot_) ERC721("Memepotz #0", "MEG0") {
+        _baseTokenURI = baseTokenURI;
+        merkleRoot = merkleRoot_;
     }
 
-    modifier mintCompliance(uint256 quantity) {
-        require(_totalMinted() + quantity <= maxSupply, "Max supply reached");
-        require(msg.value >= mintPrice, "Insufficient mint price");
-        require(_numberMinted(msg.sender) + quantity <= maxPerWallet, "Mint limit reached for wallet");
-        _;
+    function safeMint(address recipient, bytes32[] calldata merkleProof) public payable whenNotPaused {
+        require(msg.value >= mintPrice, "Not enough Ether sent");
+        require(_mintedTokens[recipient] < maxPerWallet, "Mint limit exceeded");
+
+        // Verify the merkle proof
+        bytes32 node = keccak256(abi.encodePacked(recipient));
+        require(MerkleProof.verify(merkleProof, merkleRoot, node), "Invalid proof");
+
+        _tokenIds++;
+        uint256 newItemId = _tokenIds;
+        _safeMint(recipient, newItemId);
+        _mintedTokens[recipient] += 1;
     }
 
-    constructor(
-        string memory _tokenName,
-        string memory _tokenSymbol,
-        string memory _baseUri,
-        string memory _uriSuffix,
-        uint256 _maxSupply,
-        uint256 _mintPrice,
-        uint256 _maxPerWallet
-    ) ERC721A(_tokenName, _tokenSymbol) {
-        baseUri = _baseUri;
-        uriSuffix = _uriSuffix;
-        maxSupply = _maxSupply;
-        mintPrice = _mintPrice;
-        maxPerWallet = _maxPerWallet;
+    function burn(uint256 tokenId) public virtual override(ERC721Burnable) whenNotPaused {
+        require(_isApprovedOrOwner(_msgSender(), tokenId), "ERC721: caller is not token owner or approved");
+        _burn(tokenId);
     }
 
-    function whitelistMint(
-        uint256 quantity,
-        bytes32[] calldata _merkleProof
-    ) external payable mintCompliance(quantity) whitelistCompliance(_merkleProof) {
-        _mint(msg.sender, quantity);
+    function pause() public onlyOwner {
+        _pause();
     }
 
-    function tokenURI(uint256 _tokenId) public view virtual override returns (string memory) {
-        if (!_exists(_tokenId)) revert URIQueryForNonexistentToken();
-        string memory baseURI = _baseURI();
+    function unpause() public onlyOwner {
+        _unpause();
+    }
 
-        return bytes(baseURI).length != 0 ? string(abi.encodePacked(baseURI, _toString(_tokenId), uriSuffix)) : "";
+    function airdropNFT(address recipient) public onlyOwner {
+        _tokenIds++;
+        uint256 newItemId = _tokenIds;
+        _mint(recipient, newItemId);
     }
 
     function setMaxPerWallet(uint256 _maxPerWallet) external onlyOwner {
@@ -76,7 +77,15 @@ contract Genesis is ERC721A, Ownable {
         payable(owner()).transfer(address(this).balance);
     }
 
+    function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+        _requireMinted(tokenId);
+
+        string memory baseURI = _baseURI();
+        return bytes(baseURI).length > 0 ? string(abi.encodePacked(baseURI, tokenId.toString())) : ".json";
+    }
+    
+
     function _baseURI() internal view override returns (string memory) {
-        return baseUri;
+        return _baseTokenURI;
     }
 }
